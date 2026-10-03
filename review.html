@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Review</title>
+<style>
+:root{--bg:#14161a;--fg:#e6e8eb;--mut:#8a919c;--pan:#1e2127;--acc:#4da3ff;--pin:#ff4d6d;--ok:#46c37b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px system-ui,sans-serif}
+main{display:grid;grid-template-columns:1fr 360px;gap:12px;padding:12px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+button,input,textarea{font:inherit;color:inherit;background:var(--pan);border:1px solid #333a44;border-radius:4px;padding:4px 8px}
+button{cursor:pointer}button:hover{border-color:var(--acc)}
+textarea{width:100%;min-height:64px}
+#stage{position:relative;width:100%;aspect-ratio:16/9;max-height:70vh;background:#000;cursor:crosshair;overflow:hidden}
+#v,#img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+#img{display:none}
+#pins{position:absolute;inset:0;pointer-events:none}
+.pin{position:absolute;width:16px;height:16px;margin:-8px 0 0 -8px;border-radius:50%;background:var(--pin);border:2px solid #fff}
+.pin.sel{background:var(--acc)}.pin.done{opacity:.4}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0;color:var(--mut)}
+#tl{position:relative;height:84px;background:var(--pan);border-radius:4px;cursor:pointer;overflow:hidden;touch-action:none}
+.seg{position:absolute;bottom:0;height:16px;opacity:.85;padding:1px 4px;font-size:11px;white-space:nowrap;overflow:hidden;background:#2b3a52;border-right:1px solid #000;color:var(--mut)}
+.seg:nth-child(even){background:#33405a}
+#ph{position:absolute;top:0;bottom:0;width:2px;background:#fff;pointer-events:none}
+.dot{position:absolute;top:22px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:var(--pin);border:1px solid #fff}
+.dot.sel{background:var(--acc)}.dot.done{opacity:.4}
+#ruler{position:absolute;top:0;left:0;right:0;height:18px;border-bottom:1px solid #333a44;font-size:10px;color:var(--mut)}
+.tk{position:absolute;bottom:0;width:1px;height:5px;background:#555c68}.tk.maj{height:10px;background:var(--mut)}
+.tk span{position:absolute;bottom:10px;left:3px;white-space:nowrap}
+#thumbs{position:absolute;top:18px;bottom:0;left:0;right:0}
+#thumbs img{position:absolute;top:0;height:100%;object-fit:cover;pointer-events:none;border-right:1px solid #000}
+aside{background:var(--pan);border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:8px}
+#list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+#list li{background:var(--bg);border:1px solid #333a44;border-radius:4px;padding:6px}
+#list li.sel{border-color:var(--acc)}#list li.done .txt{text-decoration:line-through;color:var(--mut)}
+.row{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.tag{color:var(--mut);font-size:12px}
+.txt{margin:4px 0;white-space:pre-wrap;word-break:break-word}
+body.drag{outline:3px dashed var(--acc);outline-offset:-6px}
+</style>
+<main>
+ <section>
+  <div class="bar">
+   <label>Load: <input id="file" type="file" multiple accept="video/*,image/*,.json"></label>
+   <label>FPS <input id="fps" type="number" value="30" min="1" max="240" style="width:64px"></label>
+   <label>Thumb every <input id="every" type="number" value="2" min="0.5" step="0.5" style="width:64px">s</label>
+   <span id="status">Drop a video, or keyframe images (+ keyframes.json), markers.json, notes.json here.</span>
+  </div>
+  <div id="stage"><video id="v" playsinline></video><img id="img" alt=""><div id="pins"></div></div>
+  <div class="bar"><button id="play">Play/Pause</button><span id="time">00:00.0 / 00:00.0</span>
+   <span>Space play · , . frame · J L ±1s · M note · click frame to pin</span></div>
+  <div id="tl"><div id="thumbs"></div><div id="ruler"></div><div id="segs"></div><div id="dots"></div><div id="ph"></div></div>
+ </section>
+ <aside>
+  <div id="draft" hidden>
+   <div id="dinfo" class="tag"></div>
+   <textarea id="dtext" placeholder="Comment (Ctrl+Enter to save)"></textarea>
+   <div class="row"><button id="dsave">Save</button><button id="dcancel">Cancel</button></div>
+  </div>
+  <ul id="list"></ul>
+  <div class="row">
+   <button id="copy">Copy prompt</button><button id="md">Download .md</button>
+   <button id="frames">Notes + frames</button>
+   <button id="exp">Export notes.json</button><button id="clear">Clear notes</button>
+  </div>
+ </aside>
+</main>
+<video id="hv" muted preload="auto" hidden></video>
+<script>
+// PURE START
+const fmt=t=>{const d=Math.floor(Math.max(0,t)*10+1e-6);return String(Math.floor(d/600)).padStart(2,'0')+':'+((d%600)/10).toFixed(1).padStart(4,'0')};
+// "00-12.400.png" = MM-SS.fff, "t12.4.png" = seconds, "frame_0300.png" = frame number / fps
+const parseT=(name,fps)=>{const b=name.replace(/\.[^.]+$/,'');let m;
+ if(m=b.match(/^(\d+)-(\d+(?:\.\d+)?)$/))return +m[1]*60+ +m[2];
+ if(m=b.match(/^t(\d+(?:\.\d+)?)$/i))return +m[1];
+ if(m=b.match(/(\d+)$/))return +m[1]/fps;
+ return null};
+// where the object-fit:contain frame sits inside a bw x bh box
+const frameRect=(bw,bh,nw,nh)=>{const k=Math.min(bw/nw,bh/nh),w=nw*k,h=nh*k;return{x:(bw-w)/2,y:(bh-h)/2,w,h}};
+const toPct=(bw,bh,nw,nh,px,py)=>{const r=frameRect(bw,bh,nw,nh);
+ if(px<r.x||py<r.y||px>r.x+r.w||py>r.y+r.h)return null;
+ return{x:(px-r.x)/r.w*100,y:(py-r.y)/r.h*100}};
+const fromPct=(bw,bh,nw,nh,x,y)=>{const r=frameRect(bw,bh,nw,nh);return{px:r.x+x/100*r.w,py:r.y+y/100*r.h}};
+function selfTest(){const ok=(n,c)=>console.log(c?'PASS':'FAIL',n);
+ ok('fmt',fmt(72.34)==='01:12.3'&&fmt(12.4)==='00:12.4'&&fmt(59.96)==='00:59.9'&&fmt(0)==='00:00.0');
+ ok('parse mm-ss',parseT('00-12.400.png',30)===12.4&&parseT('01-02.5.png',30)===62.5);
+ ok('parse t',parseT('t12.4.png',30)===12.4);
+ ok('parse frame',parseT('frame_0300.png',30)===10&&parseT('x.png',30)===null);
+ const a=toPct(200,100,100,100,100,50);ok('pct centre',a&&a.x===50&&a.y===50);
+ ok('pct letterbox',toPct(200,100,100,100,10,50)===null);
+ const b=toPct(200,100,100,100,150,25);ok('pct edge',b&&b.x===100&&b.y===25);
+ const c=fromPct(200,100,100,100,100,25);ok('roundtrip',c.px===150&&c.py===25)}
+// PURE END
+if(location.search.includes('test'))selfTest();
+
+const $=s=>document.querySelector(s),v=$('#v'),hv=$('#hv'),img=$('#img'),stage=$('#stage');
+const h=(t,p={},...k)=>{const e=Object.assign(document.createElement(t),p);e.append(...k);return e};
+const ev=(el,n)=>new Promise((ok,no)=>{el.addEventListener(n,ok,{once:true});el.addEventListener('error',no,{once:true})});
+const S={media:null,markers:[],notes:[],fps:30,selectedId:null};
+let draft=null,playing=false,base=0,t0=0,thumbTok=0,curFrame=-1,q=Promise.resolve();
+const status=s=>$('#status').textContent=s;
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const markerAt=t=>(S.markers.find(k=>t>=k.start&&t<k.end)||{}).label||'';
+const key=()=>'review:'+S.media.name+':'+S.media.duration.toFixed(2);
+const save=()=>{try{localStorage.setItem(key(),JSON.stringify(S.notes))}catch{}};
+const open=()=>[...S.notes].sort((a,b)=>a.t-b.t).filter(n=>n.status!=='resolved');
+const dl=(blob,name)=>{const a=h('a',{href:URL.createObjectURL(blob),download:name});a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1e4)};
+
+// ---- time source ----
+function getT(){const m=S.media;if(!m)return 0;if(m.kind==='video')return v.currentTime;
+ if(playing){const t=base+(performance.now()-t0)/1000;if(t>=m.duration){playing=false;base=m.duration;return base}return t}
+ return base}
+function seek(t){const m=S.media;t=Math.max(0,Math.min(t,m.duration));if(m.kind==='video')v.currentTime=t;else{base=t;t0=performance.now()}}
+function pause(){if(S.media.kind==='video')v.pause();else{base=getT();playing=false}}
+function toggle(){const m=S.media;if(!m)return;
+ if(m.kind==='video')return v.paused?v.play():v.pause();
+ if(playing)return pause();
+ if(base>=m.duration)base=0;t0=performance.now();playing=true}
+const frameIdx=t=>{const f=S.media.frames;let i=0;while(i+1<f.length&&f[i+1].t<=t)i++;return i};
+
+// ---- loading ----
+async function load(files){
+ try{
+  files=[...files];
+  const vid=files.find(f=>f.type.startsWith('video/')||/\.(mp4|webm|mov|m4v|ogv)$/i.test(f.name));
+  const imgs=files.filter(f=>f.type.startsWith('image/'));
+  const js=[];for(const f of files.filter(f=>/\.json$/i.test(f.name)))try{js.push(JSON.parse(await f.text()))}catch{status('Bad JSON: '+f.name)}
+  const arr=p=>js.find(j=>Array.isArray(j)&&j[0]&&p(j[0]));
+  const manifest=arr(e=>'src' in e&&'t' in e),mk=arr(e=>'start' in e),nt=js.find(j=>Array.isArray(j)?j[0]&&'text' in j[0]:j&&Array.isArray(j.notes));
+  if(vid)await loadVideo(vid);else if(imgs.length)await loadKeys(imgs,manifest);
+  if(!S.media)return status('Load a video or keyframe images first.');
+  if(mk){S.markers=mk.filter(k=>isFinite(k.start)&&isFinite(k.end));S.notes.forEach(n=>n.marker=markerAt(n.t));thumbs()}
+  if(nt){S.notes=(Array.isArray(nt)?nt:nt.notes).map(n=>({status:'open',marker:markerAt(n.t),x:null,y:null,...n,id:n.id||uid()}));save()}
+  render();status(`${S.media.name} · ${S.notes.length} notes · ${S.markers.length} markers`);
+ }catch(e){status('Load failed: '+(e.message||e.type||e))}}
+async function loadVideo(f){
+ const url=URL.createObjectURL(f);v.src=hv.src=url;
+ await Promise.all([ev(v,'loadedmetadata'),ev(hv,'loadedmetadata')]);
+ setMedia({kind:'video',name:f.name,duration:v.duration,w:v.videoWidth,h:v.videoHeight})}
+async function loadKeys(imgs,manifest){
+ const by=new Map(imgs.map(f=>[f.name,f]));
+ let named=imgs.map(f=>({t:parseT(f.name,S.fps),f}));
+ // no timestamps in filenames: fall back to natural filename order, one image per "Thumb every" seconds
+ if(!manifest&&named.every(e=>e.t==null)){const step=+$('#every').value||2;
+  named=[...imgs].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})).map((f,i)=>({t:i*step,f}))}
+ const fr=(manifest?manifest.map(e=>({t:+e.t,f:by.get(String(e.src).split(/[\\/]/).pop())})):named)
+  .filter(e=>e.f&&e.t!=null&&isFinite(e.t)).sort((a,b)=>a.t-b.t);
+ if(!fr.length)throw new Error('no image has a parseable timestamp');
+ fr.forEach(e=>e.src=URL.createObjectURL(e.f));
+ img.src=fr[0].src;await ev(img,'load');
+ setMedia({kind:'keys',name:`keyframes[${fr.length}]`,duration:fr[fr.length-1].t+1,frames:fr,w:img.naturalWidth,h:img.naturalHeight})}
+function setMedia(m){
+ S.media=m;S.markers=[];draft=null;S.selectedId=null;playing=false;base=0;curFrame=-1;
+ v.style.display=m.kind==='video'?'':'none';img.style.display=m.kind==='keys'?'block':'none';
+ stage.style.aspectRatio=m.w+'/'+m.h;
+ try{S.notes=JSON.parse(localStorage.getItem(key())||'[]')}catch{S.notes=[]}
+ thumbs();ruler()}
+
+// ---- thumbnails / frame capture (serialised through one hidden video) ----
+async function cap(t,w){const m=S.media;let src;
+ if(m.kind==='video'){if(Math.abs(hv.currentTime-t)>1e-3){const s=ev(hv,'seeked');hv.currentTime=t;await s}src=hv}
+ else{src=new Image();src.src=m.frames[frameIdx(t)].src;await src.decode()}
+ const nw=src.videoWidth||src.naturalWidth,nh=src.videoHeight||src.naturalHeight,k=w?Math.min(1,w/nw):1;
+ const c=h('canvas',{width:Math.round(nw*k),height:Math.round(nh*k)});
+ c.getContext('2d').drawImage(src,0,0,c.width,c.height);return c}
+const grab=(t,w)=>{const p=q.then(()=>cap(t,w));q=p.catch(()=>{});return p};
+const thumb=(src,t,t2)=>{const d=S.media.duration;return h('img',{src,title:fmt(t),style:`left:${t/d*100}%;width:${(t2-t)/d*100}%`})};
+// second ticks on the timeline axis; label step chosen so labels stay ~60px apart
+function ruler(){const m=S.media,box=$('#ruler');if(!m)return;const w=$('#tl').clientWidth||1;
+ const step=[1,2,5,10,15,30,60,120,300,600,1800,3600].find(s=>s/m.duration*w>=60)||3600,ticks=[];
+ for(let t=0;t<=m.duration;t++)if(t%step===0||w/m.duration>=6)ticks.push(h('div',{className:'tk'+(t%step?'':' maj'),style:`left:${t/m.duration*100}%`},...(t%step?[]:[h('span',{textContent:t+'s'})])));
+ box.replaceChildren(...ticks)}
+async function thumbs(){
+ const tok=++thumbTok,m=S.media,box=$('#thumbs');box.replaceChildren();if(!m)return;
+ if(m.kind==='keys')return box.append(...m.frames.map((f,i)=>thumb(f.src,f.t,i+1<m.frames.length?m.frames[i+1].t:m.duration)));
+ const n=Math.max(.5,+$('#every').value||2),ts=new Set(S.markers.map(k=>k.start));
+ for(let t=0;t<m.duration;t+=n)ts.add(+t.toFixed(3));
+ const all=[...ts].filter(t=>t<m.duration).sort((a,b)=>a-b);
+ for(const [i,t] of all.entries()){
+  if(tok!==thumbTok)return;
+  try{const u=(await grab(t,120)).toDataURL('image/jpeg',.6);if(tok===thumbTok)box.append(thumb(u,t,i+1<all.length?all[i+1]:m.duration))}catch{}}}
+
+// ---- render ----
+function render(){const m=S.media;if(!m)return;
+ $('#segs').replaceChildren(...S.markers.map(k=>h('div',{className:'seg',title:k.label,textContent:k.label,style:`left:${k.start/m.duration*100}%;width:${(k.end-k.start)/m.duration*100}%`})));
+ const go=n=>{pause();seek(n.t);S.selectedId=n.id;render()};
+ $('#dots').replaceChildren(...S.notes.map(n=>h('div',{className:'dot'+(n.id===S.selectedId?' sel':'')+(n.status==='resolved'?' done':''),title:n.text,
+  style:`left:${n.t/m.duration*100}%`,onpointerdown:e=>e.stopPropagation(),onclick:()=>go(n)})));
+ $('#list').replaceChildren(...[...S.notes].sort((a,b)=>a.t-b.t).map(n=>h('li',{className:(n.id===S.selectedId?'sel ':'')+(n.status==='resolved'?'done':'')},
+  h('div',{className:'row'},h('button',{textContent:fmt(n.t),onclick:()=>go(n)}),
+   h('span',{className:'tag',textContent:[n.marker,n.x==null?'whole frame':`(${Math.round(n.x)}%, ${Math.round(n.y)}%)`].filter(Boolean).join(' · ')})),
+  h('div',{className:'txt',textContent:n.text}),
+  h('div',{className:'row'},
+   h('button',{textContent:'Edit',onclick:()=>{go(n);showDraft({id:n.id,t:n.t,x:n.x,y:n.y,text:n.text})}}),
+   h('button',{textContent:n.status==='resolved'?'Reopen':'Resolve',onclick:()=>{n.status=n.status==='resolved'?'open':'resolved';save();render()}}),
+   h('button',{textContent:'Delete',onclick:()=>{S.notes=S.notes.filter(x=>x!==n);save();render()}})))));
+ $('#draft').hidden=!draft}
+function showDraft(d){draft=d;render();$('#dinfo').textContent=`${d.id?'Edit':'New'} note @${fmt(d.t)}`+(d.x==null?' · whole frame':'');
+ $('#dtext').value=d.text||'';$('#dtext').focus()}
+function save1(){const text=$('#dtext').value.trim();if(!text)return;
+ if(draft.id)S.notes.find(n=>n.id===draft.id).text=text;
+ else{const n={id:uid(),t:draft.t,x:draft.x,y:draft.y,marker:markerAt(draft.t),text,status:'open'};S.notes.push(n);S.selectedId=n.id}
+ draft=null;save();render()}
+
+function tick(){const m=S.media;
+ if(m){const t=getT(),r=stage.getBoundingClientRect();
+  $('#ph').style.left=t/m.duration*100+'%';
+  $('#time').textContent=fmt(t)+' / '+fmt(m.duration);
+  if(m.kind==='keys'){const i=frameIdx(t);if(i!==curFrame){curFrame=i;img.src=m.frames[i].src}}
+  const near=[...S.notes.map(n=>({...n,sel:n.id===S.selectedId})),...(draft&&!draft.id?[{...draft,sel:true}]:[])].filter(n=>n.x!=null&&Math.abs(n.t-t)<=.5);
+  $('#pins').replaceChildren(...near.map(n=>{const p=fromPct(r.width,r.height,m.w,m.h,n.x,n.y);
+   return h('div',{className:'pin'+(n.sel?' sel':'')+(n.status==='resolved'?' done':''),style:`left:${p.px}px;top:${p.py}px`})}))}
+ requestAnimationFrame(tick)}
+
+// ---- export ----
+function prompt(){const m=S.media;
+ return `# Review notes for ${m.name} (duration ${fmt(m.duration)})\nApply each change below. Times are seconds from the start; positions are % of frame (x from left, y from top).\n\n`+
+ open().map((n,i)=>`${i+1}. @${fmt(n.t)}${n.marker?` [${n.marker}]`:''} ${n.x==null?'whole frame':`at (${Math.round(n.x)}%, ${Math.round(n.y)}%)`}: ${n.text}`).join('\n')+'\n'}
+async function copy(){const s=prompt();
+ try{await navigator.clipboard.writeText(s)}catch{const t=h('textarea',{value:s});document.body.append(t);t.select();document.execCommand('copy');t.remove()}
+ status('Prompt copied.')}
+async function frames(){
+ dl(new Blob([prompt()],{type:'text/markdown'}),'notes.md');
+ const o=open();
+ for(const [i,n] of o.entries()){if(n.x==null)continue;
+  const c=await grab(n.t),x=c.getContext('2d'),r=Math.max(8,c.width/80);
+  x.beginPath();x.arc(n.x/100*c.width,n.y/100*c.height,r,0,7);x.fillStyle='#ff4d6d';x.fill();x.lineWidth=r/4;x.strokeStyle='#fff';x.stroke();
+  const b=await new Promise(ok=>c.toBlob(ok,'image/png'));
+  dl(b,`note-${String(i+1).padStart(2,'0')}-${fmt(n.t).replace(':','-')}.png`)}
+ status('Downloaded notes.md + pinned frames.')}
+
+// ---- events ----
+$('#file').onchange=e=>load(e.target.files);
+addEventListener('dragover',e=>{e.preventDefault();document.body.classList.add('drag')});
+addEventListener('dragleave',e=>{if(!e.relatedTarget)document.body.classList.remove('drag')});
+addEventListener('drop',e=>{e.preventDefault();document.body.classList.remove('drag');load(e.dataTransfer.files)});
+$('#fps').onchange=e=>S.fps=+e.target.value||30;
+$('#every').onchange=thumbs;
+addEventListener('resize',ruler);
+$('#play').onclick=toggle;
+stage.onclick=e=>{const m=S.media;if(!m)return;const r=stage.getBoundingClientRect();
+ const p=toPct(r.width,r.height,m.w,m.h,e.clientX-r.left,e.clientY-r.top);if(!p)return;
+ pause();showDraft({t:getT(),x:p.x,y:p.y})};
+const tl=$('#tl'),tlSeek=e=>{const r=tl.getBoundingClientRect();seek((e.clientX-r.left)/r.width*S.media.duration)};
+tl.onpointerdown=e=>{if(!S.media)return;tl.setPointerCapture(e.pointerId);tlSeek(e);tl.onpointermove=tlSeek};
+tl.onpointerup=()=>tl.onpointermove=null;
+$('#dsave').onclick=save1;
+$('#dcancel').onclick=()=>{draft=null;render()};
+$('#dtext').onkeydown=e=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey))save1();if(e.key==='Escape')$('#dcancel').click()};
+$('#copy').onclick=()=>S.media&&copy();
+$('#md').onclick=()=>S.media&&dl(new Blob([prompt()],{type:'text/markdown'}),'notes.md');
+$('#frames').onclick=()=>S.media&&frames();
+$('#exp').onclick=()=>S.media&&dl(new Blob([JSON.stringify({media:S.media.name,duration:S.media.duration,notes:S.notes},null,1)],{type:'application/json'}),'notes.json');
+$('#clear').onclick=()=>{if(S.media&&confirm('Delete all notes?')){S.notes=[];draft=null;save();render()}};
+addEventListener('keydown',e=>{
+ if(/INPUT|TEXTAREA/.test(e.target.tagName)||!S.media||e.ctrlKey||e.metaKey||e.altKey)return;
+ const t=getT(),f=1/S.fps;
+ const a={' ':toggle,',':()=>{pause();seek(t-f)},'.':()=>{pause();seek(t+f)},j:()=>seek(t-1),l:()=>seek(t+1),
+  m:()=>{pause();showDraft({t,x:null,y:null})}}[e.key.toLowerCase()];
+ if(a){e.preventDefault();a()}});
+tick();
+</script>
