@@ -12,7 +12,7 @@ main{display:grid;grid-template-columns:1fr 360px;gap:12px;padding:12px}
 button,input,textarea{font:inherit;color:inherit;background:var(--pan);border:1px solid #333a44;border-radius:4px;padding:4px 8px}
 button{cursor:pointer}button:hover{border-color:var(--acc)}
 textarea{width:100%;min-height:64px}
-#stage{position:relative;width:100%;aspect-ratio:16/9;max-height:70vh;background:#000;cursor:crosshair;overflow:hidden}
+#stage{position:relative;width:min(100%,calc(70vh*var(--ar,1.7778)));aspect-ratio:var(--ar,1.7778);margin:0 auto;background:#000;cursor:crosshair;overflow:hidden}
 #v,#img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 #img{display:none}
 #pins{position:absolute;inset:0;pointer-events:none}
@@ -71,9 +71,9 @@ body.drag{outline:3px dashed var(--acc);outline-offset:-6px}
 const fmt=t=>{const d=Math.floor(Math.max(0,t)*10+1e-6);return String(Math.floor(d/600)).padStart(2,'0')+':'+((d%600)/10).toFixed(1).padStart(4,'0')};
 // "00-12.400.png" = MM-SS.fff, "t12.4.png" = seconds, "frame_0300.png" = frame number / fps
 const parseT=(name,fps)=>{const b=name.replace(/\.[^.]+$/,'');let m;
- if(m=b.match(/^(\d+)-(\d+(?:\.\d+)?)$/))return +m[1]*60+ +m[2];
- if(m=b.match(/^t(\d+(?:\.\d+)?)$/i))return +m[1];
- if(m=b.match(/(\d+)$/))return +m[1]/fps;
+ if(m=b.match(/^(\d+)-(\d+(?:\.\d+)?)(?:_.*)?$/))return +m[1]*60+ +m[2];
+ if(m=b.match(/^t(\d+(?:\.\d+)?)(?:_.*)?$/i))return +m[1];
+ if(m=b.match(/^\D*(\d+)$/))return +m[1]/fps;
  return null};
 // where the object-fit:contain frame sits inside a bw x bh box
 const frameRect=(bw,bh,nw,nh)=>{const k=Math.min(bw/nw,bh/nh),w=nw*k,h=nh*k;return{x:(bw-w)/2,y:(bh-h)/2,w,h}};
@@ -85,6 +85,7 @@ function selfTest(){const ok=(n,c)=>console.log(c?'PASS':'FAIL',n);
  ok('fmt',fmt(72.34)==='01:12.3'&&fmt(12.4)==='00:12.4'&&fmt(59.96)==='00:59.9'&&fmt(0)==='00:00.0');
  ok('parse mm-ss',parseT('00-12.400.png',30)===12.4&&parseT('01-02.5.png',30)===62.5);
  ok('parse t',parseT('t12.4.png',30)===12.4);
+ ok('parse suffix',parseT('00-03.0_s1-hook.png',30)===3&&parseT('00-15.4_s2-cuts123.png',30)===15.4);
  ok('parse frame',parseT('frame_0300.png',30)===10&&parseT('x.png',30)===null);
  const a=toPct(200,100,100,100,100,50);ok('pct centre',a&&a.x===50&&a.y===50);
  ok('pct letterbox',toPct(200,100,100,100,10,50)===null);
@@ -152,7 +153,7 @@ async function loadKeys(imgs,manifest){
 function setMedia(m){
  S.media=m;S.markers=[];draft=null;S.selectedId=null;playing=false;base=0;curFrame=-1;
  v.style.display=m.kind==='video'?'':'none';img.style.display=m.kind==='keys'?'block':'none';
- stage.style.aspectRatio=m.w+'/'+m.h;
+ stage.style.setProperty('--ar',m.w/m.h);
  try{S.notes=JSON.parse(localStorage.getItem(key())||'[]')}catch{S.notes=[]}
  thumbs();ruler()}
 
